@@ -39,6 +39,7 @@ using namespace std;
 #include <graph_hash_of_mixed_weighted/graph_hash_of_mixed_weighted_generate_random_graph.h>
 #include <graph_hash_of_mixed_weighted/graph_hash_of_mixed_weighted_graph1_is_in_graph2.h>
 #include <graph_hash_of_mixed_weighted/graph_hash_of_mixed_weighted_copy_weights_of_graph1_to_graph2.h>
+#include <graph_hash_of_mixed_weighted/graph_hash_of_mixed_weighted_extract_subgraph.h>
 #include <graph_hash_of_mixed_weighted/graph_hash_of_mixed_weighted_extract_subgraph_for_a_hash_of_vertices.h>
 #include <graph_hash_of_mixed_weighted/graph_hash_of_mixed_weighted_extract_subgraph_for_a_list_of_vertices.h>
 #include <graph_hash_of_mixed_weighted/graph_hash_of_mixed_weighted_random_spanning_tree.h>
@@ -53,7 +54,7 @@ using namespace std;
 #include <print_items.h>
 #include <text mining/string_is_number.h>
 #include <PairingHeapYS.h>
-
+#include <ThreadPool.h>
 
 
 /*header files in the Boost library: https://www.boost.org/ */
@@ -392,7 +393,7 @@ void update_solution(pair<graph_hash_of_mixed_weighted, pair<int, int>>& Theta_M
 		w_Theta_M_T_M = quick_w_T_i_Theta_T_i;
 	}
 
-	if (L_T_i > L_for_upper_bound && Omega3.count(unique_time_subinterval_string(T_i)) == 0) { // in the guarantee of S-MIRROR, L is only counted in Omega2, which contains Omega1
+	if (L_T_i > L_for_upper_bound&& Omega3.count(unique_time_subinterval_string(T_i)) == 0) { // in the guarantee of S-MIRROR, L is only counted in Omega2, which contains Omega1
 		L_for_upper_bound = L_T_i;
 	}
 
@@ -490,22 +491,17 @@ void update_nw_ec_most_generous_way(pair<int, int>& input_time_interval, graph_h
 			it->second.vertex_weight = alpha + 1; // vertex weight is alpha + 1
 		}
 
-		/*time complexity throughout the loop: O(V + E)*/
-		auto search = input_graph.hash_of_hashs.find(v);
-		if (search != input_graph.hash_of_hashs.end()) {
-			for (auto it2 = search->second.begin(); it2 != search->second.end(); it2++) {
-				it2->second = 1; // update ec as 1
-			}
-		}
-		else {
-			auto search2 = input_graph.hash_of_vectors.find(v);
-			for (auto it2 = search2->second.adj_vertices.begin(); it2 != search2->second.adj_vertices.end(); it2++) {
-				it2->second = 1; // update ec as 1
-			}
+		for (auto it2 = it->second.adj_vertices.begin(); it2 != it->second.adj_vertices.end(); it2++) {
+			it2->second = 1; // update ec as 1
 		}
 	}
 	//cout << "queried_vertex_num: " << queried_vertex_num << endl;
 
+	for (auto it = input_graph.hash_of_hashs.begin(); it != input_graph.hash_of_hashs.end(); it++) {
+		for (auto it2 = it->second.begin(); it2 != it->second.end(); it2++) {
+			it2->second = 1; // update ec as 1
+		}
+	}
 }
 #pragma endregion update_nw_ec_most_generous_way
 
@@ -549,7 +545,18 @@ void degree_0_1_2_test(pair<int, int>& input_time_interval, graph_hash_of_mixed_
 	/*degree_0_1_2_test*/
 	std::queue<int> degree_0_remove_vertices, degree_1_remove_vertices, degree_2_remove_vertices;
 	for (auto it = input_graph.hash_of_vectors.begin(); it != input_graph.hash_of_vectors.end(); it++) {
-		check_vertex(it->first, input_graph, degree_0_remove_vertices, degree_1_remove_vertices, degree_2_remove_vertices);
+		if (it->second.vertex_weight == 0) {
+			int d = graph_hash_of_mixed_weighted_degree(input_graph, it->first);
+			if (d == 0) {
+				degree_0_remove_vertices.push(it->first);
+			}
+			else if (d == 1) {
+				degree_1_remove_vertices.push(it->first);
+			}
+			else if (d == 2) {
+				degree_2_remove_vertices.push(it->first);
+			}
+		}
 	}
 
 	while (degree_0_remove_vertices.size() > 0 || degree_1_remove_vertices.size() > 0 || degree_2_remove_vertices.size() > 0) {
@@ -656,7 +663,7 @@ void update_special_edges_in_G_dash_T_i(graph_hash_of_mixed_weighted& special_ed
 #pragma endregion update_special_edges_in_G_dash_T_i
 
 #pragma region
-bool skip_to_next_loop(std::list<std::list<int>>& cpns, pair<int, int>& T_i, graph_hash_of_mixed_weighted& input_graph, 
+bool skip_to_next_loop(std::list<std::list<int>>& cpns, pair<int, int>& T_i, graph_hash_of_mixed_weighted& input_graph,
 	double& w_Theta_M_T_M, std::unordered_set<string>& P, double& kappa_2) {
 
 	/*pruning; time complexity: O(|V|)*/
@@ -871,7 +878,6 @@ pair<graph_hash_of_mixed_weighted, pair<int, int>> S_MIRROR(pair<int, int> input
 #pragma endregion S_MIRROR
 
 
-
 /*part of MIRROR and S-MIRROR*/
 
 #pragma region
@@ -1017,10 +1023,6 @@ pair<graph_hash_of_mixed_weighted, pair<int, int>> S_MIRROR_onlyBandB(pair<int, 
 #pragma endregion S_MIRROR_onlyBandB
 
 
-
-
-
-
 /*H_MIRROR and H_S_MIRROR*/
 
 #pragma region
@@ -1103,6 +1105,430 @@ pair<graph_hash_of_mixed_weighted, pair<int, int>> H_S_MIRROR(pair<int, int> inp
 
 }
 #pragma endregion H_S_MIRROR
+
+
+
+
+
+/*accelerations of MIRROR etc. (accelerated_MIRROR is 3-10 times faster than the above MIRROR);
+graph_v_of_v_idealID is used in accelerated_MIRROR_main_process*/
+#include <graph_v_of_v_idealID/graph_v_of_v_idealID.h>
+#include <graph_v_of_v_idealID/graph_v_of_v_idealID_connected_components.h>
+#include <graph_v_of_v_idealID/graph_v_of_v_idealID_Fast_GW_Growing_tree.h>
+#include <graph_hash_of_mixed_weighted/graph_hash_of_mixed_weighted_to_graph_v_of_v_idealID.h>
+#include <graph_hash_of_mixed_weighted/graph_hash_of_mixed_weighted_update_vertexIDs.h>
+
+/*accelerated_MIRROR and accelerated_S_MIRROR*/
+
+#pragma region
+void transform_input_graphs_and_times(pair<int, int> input_time_interval, int& time_ID_old_to_new_change_value, graph_hash_of_mixed_weighted& input_graph,
+	graph_hash_of_mixed_weighted& query_state_graph, unordered_map<int, int>& vertexID_old_to_new, vector<int>& vertexID_new_to_old, graph_v_of_v_idealID& new_input_graph, graph_v_of_v_idealID& new_query_state_graph) {
+
+
+	vertexID_new_to_old.resize(input_graph.hash_of_vectors.size());
+	int new_v_id = 0;
+	for (auto it = input_graph.hash_of_vectors.begin(); it != input_graph.hash_of_vectors.end(); it++) {
+		vertexID_new_to_old[new_v_id] = it->first;
+		vertexID_old_to_new[it->first] = new_v_id;
+		new_v_id++;
+	}
+	new_input_graph = graph_hash_of_mixed_weighted_to_graph_v_of_v_idealID(input_graph, vertexID_old_to_new);
+
+	time_ID_old_to_new_change_value = new_input_graph.size() - input_time_interval.first; // new_time starts at input_time_interval.first + time_ID_old_to_new_change_value = new_input_graph.size()
+
+	/* vertices in new_query_state_graph starts from 0 to new_input_graph.size() + input_time_interval.second - input_time_interval.first */
+	new_query_state_graph.resize(new_input_graph.size() + input_time_interval.second - input_time_interval.first + 1);
+	int N = new_input_graph.size();
+	for (int i = 0; i < N; i++) {
+		std::vector<int> times = query_state_graph.adj_v(vertexID_new_to_old[i]);
+		int size_times = times.size();
+		for (int j = 0; j < size_times; j++) {
+			if (times[j] >= input_time_interval.first && times[j] <= input_time_interval.second) {
+				graph_v_of_v_idealID_add_edge(new_query_state_graph, i, times[j] + time_ID_old_to_new_change_value, 1);
+			}
+		}
+	}
+
+}
+#pragma endregion transform_input_graphs_and_times
+
+#pragma region
+void accelerated_build_G_dash_T_i(graph_v_of_v_idealID& input_graph, graph_v_of_v_idealID& query_state_graph, pair<int, int> T_i, double alpha, int time_ID_old_to_new_change_value, vector<double>& vertexID_new_weights) {
+
+	/*this function update vertex and edge weights of input_graph;
+
+	time complexity: O(V + sum of query_states + E), at most O(mV + E)*/
+
+	int N = input_graph.size();
+
+	pair<int, int> new_T_i = { T_i.first + time_ID_old_to_new_change_value, T_i.second + time_ID_old_to_new_change_value };
+	int delta_T_i = T_i.second - T_i.first + 1;
+
+	for (int v = 0; v < N; v++) {
+		vertexID_new_weights[v] = 0; // initialize vertex weight to 0
+
+		/*time complexity throughout the loop: O(V + sum of query_states)*/
+		int adj_size = query_state_graph[v].size();
+		for (int i = 0; i < adj_size; i++) {
+			int new_time_ID = query_state_graph[v][i].first;
+			if (new_time_ID >= new_T_i.first && new_time_ID <= new_T_i.second) {
+				vertexID_new_weights[v] = vertexID_new_weights[v] + alpha + 1; // update vertex weight
+			}
+		}
+
+		/*time complexity throughout the loop: O(V + E)*/
+		adj_size = input_graph[v].size();
+		for (int i = 0; i < adj_size; i++) {
+			input_graph[v][i].second = delta_T_i; // update ec
+		}
+	}
+
+}
+#pragma endregion accelerated_build_G_dash_T_i
+
+#pragma region
+bool accelerated_skip_to_next_loop(std::list<std::list<int>>& cpns, pair<int, int>& T_i, vector<double>& vertexID_new_weights,
+	double& w_Theta_M_T_M, std::unordered_set<string>& P, double& kappa_2) {
+
+	/*pruning; time complexity: O(|V|)*/
+	double max_nw_sum_a_cpn = 0, max_UB_weight = -INT_MAX, Gsub_ec = (double)T_i.second - T_i.first + 1;
+	for (auto it = cpns.begin(); it != cpns.end(); it++) {
+		double nw_sum = 0, larger_than_ec_total_weight = 0;
+		int larger_than_ec_total_num = 0;
+		for (auto it2 = it->begin(); it2 != it->end(); it2++) {
+			double nw = vertexID_new_weights[*it2];
+			if (nw > 0) {
+				nw_sum = nw_sum + nw;
+				if (nw > Gsub_ec) {
+					larger_than_ec_total_weight = larger_than_ec_total_weight + nw;
+					larger_than_ec_total_num++;
+				}
+			}
+		}
+		if (max_nw_sum_a_cpn < nw_sum) {
+			max_nw_sum_a_cpn = nw_sum;
+		}
+		double solu_weight_UB = -INT_MAX;
+		if (larger_than_ec_total_num > 0) {
+			solu_weight_UB = larger_than_ec_total_weight - (double)larger_than_ec_total_num * Gsub_ec;
+		}
+		if (max_UB_weight < solu_weight_UB) {
+			max_UB_weight = solu_weight_UB;
+		}
+	}
+	if (max_nw_sum_a_cpn - ((double)T_i.second - T_i.first + 1) <= w_Theta_M_T_M) {
+		if (max_nw_sum_a_cpn <= w_Theta_M_T_M) {
+			for (int yy = T_i.first; yy <= T_i.second; yy++) {
+				for (int zz = yy; zz <= T_i.second; zz++) {
+					P.insert(unique_time_subinterval_string({ yy,zz }));
+				}
+			}
+		}
+		if (kappa_2 < max_nw_sum_a_cpn) {
+			kappa_2 = max_nw_sum_a_cpn;
+		}
+		return true;
+	}
+	if (max_UB_weight <= w_Theta_M_T_M) {
+		if (kappa_2 < max_nw_sum_a_cpn) {
+			kappa_2 = max_nw_sum_a_cpn;
+		}
+		return true;
+	}
+
+	return false;
+
+}
+#pragma endregion accelerated_skip_to_next_loop
+
+#pragma region
+vector<pair<pair<int, int>, double>> record_special_edges(graph_hash_of_mixed_weighted& special_edges_graph, unordered_map<int, int>& vertexID_old_to_new) {
+
+	vector<pair<pair<int, int>, double>> special_edges;
+
+	for (auto it1 = special_edges_graph.hash_of_vectors.begin(); it1 != special_edges_graph.hash_of_vectors.end(); it1++) {
+		int i = it1->first;
+		auto search = special_edges_graph.hash_of_hashs.find(i);
+		if (search != special_edges_graph.hash_of_hashs.end()) {
+			for (auto it2 = search->second.begin(); it2 != search->second.end(); it2++) {
+				int j = it2->first;
+				if (i < j) {
+					double ec = it2->second;
+					special_edges.push_back({ {vertexID_old_to_new[i],vertexID_old_to_new[j]},ec });
+				}
+			}
+		}
+		else {
+			auto search2 = special_edges_graph.hash_of_vectors.find(i);
+			for (auto it2 = search2->second.adj_vertices.begin(); it2 != search2->second.adj_vertices.end(); it2++) {
+				int j = it2->first;
+				if (i < j) {
+					double ec = it2->second;
+					special_edges.push_back({ {vertexID_old_to_new[i],vertexID_old_to_new[j]},ec });
+				}
+			}
+		}
+	}
+
+	return special_edges;
+}
+#pragma endregion record_special_edges
+
+#pragma region
+void accelerated_update_special_edges_in_G_dash_T_i(vector<pair<pair<int, int>, double>>& special_edges, graph_v_of_v_idealID& G_dash_T_i, double T_i_module) {
+
+	int special_edges_size = special_edges.size();
+	for (int i = 0; i < special_edges_size; i++) {
+		graph_v_of_v_idealID_add_edge(G_dash_T_i, special_edges[i].first.first, special_edges[i].first.second, special_edges[i].second * T_i_module);
+	}
+}
+#pragma endregion accelerated_update_special_edges_in_G_dash_T_i
+
+#pragma region
+pair<graph_hash_of_mixed_weighted, pair<int, int>> accelerated_MIRROR_main_process(pair<int, int> input_time_interval, graph_hash_of_mixed_weighted& input_graph,
+	graph_hash_of_mixed_weighted& query_state_graph, double alpha, double& L_for_upper_bound, vector<pair<pair<int, int>, int>>& Phi,
+	std::unordered_set<string>& Omega3, graph_hash_of_mixed_weighted& special_edges_graph, double& kappa_2, bool use_B_and_B) {
+
+	L_for_upper_bound = 0, kappa_2 = 0;
+
+	/*initialization; time complexity: O(1)*/
+	pair<graph_hash_of_mixed_weighted, pair<int, int>> Theta_M_T_M; // <tree, time_subinterval>
+	double w_Theta_M_T_M = -INT_MAX;
+	std::unordered_set<string> P; // the pruned time sub-interval
+
+	/*transform input_graph and query_state_graph to graph_v_of_v_idealID*/
+	int time_ID_old_to_new_change_value = 0;
+	vector<int> vertexID_new_to_old;
+	unordered_map<int, int> vertexID_old_to_new;
+	graph_v_of_v_idealID new_input_graph, new_query_state_graph;
+	transform_input_graphs_and_times(input_time_interval, time_ID_old_to_new_change_value, input_graph, query_state_graph, vertexID_old_to_new, vertexID_new_to_old, new_input_graph, new_query_state_graph);
+	vector<double> vertexID_new_weights(new_input_graph.size(), 0);
+
+	/*time complexity O(|V|+|E|)*/
+	std::list<std::list<int>> cpns = graph_v_of_v_idealID_connected_components(new_input_graph);
+
+	vector<pair<pair<int, int>, double>> special_edges = record_special_edges(special_edges_graph, vertexID_old_to_new);
+
+	/*enumerate all time sub-intervals*/
+	for (int xx = 0; xx < Phi.size(); xx++) {
+		pair<int, int> T_i = Phi[xx].first;
+		if (P.count(unique_time_subinterval_string(T_i)) == 0) { // T_i has not been removed
+
+			/*time complexity: O(V + sum of query_states + E), at most O(mV + E)*/
+			accelerated_build_G_dash_T_i(new_input_graph, new_query_state_graph, T_i, alpha, time_ID_old_to_new_change_value, vertexID_new_weights);
+
+			if (use_B_and_B && accelerated_skip_to_next_loop(cpns, T_i, vertexID_new_weights, w_Theta_M_T_M, P, kappa_2)) {
+				continue;
+			}
+
+			accelerated_update_special_edges_in_G_dash_T_i(special_edges, new_input_graph, (double)T_i.second - T_i.first + 1); // special edge weights are not used in the above pruning process
+
+			/*Fast_GW_Growing; Time complexity: O(d E log V)*/
+			graph_hash_of_mixed_weighted Theta_T_i = graph_v_of_v_idealID_Fast_GW_Growing_tree(new_input_graph, vertexID_new_weights, "tree");
+
+			/*General_Pruning for trees*/
+			graph_hash_of_mixed_weighted Theta_T_i2 = graph_hash_of_mixed_weighted_General_Pruning_tree(Theta_T_i);
+
+			update_solution(Theta_M_T_M, Theta_T_i2, L_for_upper_bound, w_Theta_M_T_M, T_i, Omega3);
+
+		}
+	}
+
+	/*change new vertex_IDs in Theta_M_T_M to old vertex IDs*/
+	Theta_M_T_M.first = graph_hash_of_mixed_weighted_update_vertexIDs(Theta_M_T_M.first, vertexID_new_to_old);
+
+
+	return Theta_M_T_M;
+}
+#pragma endregion accelerated_MIRROR_main_process
+
+#pragma region
+pair<graph_hash_of_mixed_weighted, pair<int, int>> accelerated_MIRROR(pair<int, int> input_time_interval, graph_hash_of_mixed_weighted& input_graph,
+	graph_hash_of_mixed_weighted& query_state_graph, double alpha, double& L_for_upper_bound, bool use_reudction, bool use_B_and_B) {
+
+	graph_hash_of_mixed_weighted new_input_graph = input_graph;
+
+	vector<pair<pair<int, int>, int>> Phi = sorted_all_time_subintervals(input_time_interval);
+	std::unordered_set<string> Omega3;
+	double kappa_2;
+
+	/*reduce input_graph, which is a copy here*/
+	graph_hash_of_mixed_weighted special_edges_graph;
+	unordered_map<string, pair<pair<int, int>, pair<int, int>>> newly_merged_edges; // string is the ID of a newly merged edge, the two pairs are the two edges that correspond to the newly merged edge
+	if (use_reudction) {
+		degree_0_1_2_test(input_time_interval, query_state_graph, new_input_graph, alpha, special_edges_graph, newly_merged_edges);
+	}
+
+	pair<graph_hash_of_mixed_weighted, pair<int, int>> Theta_M_T_M = accelerated_MIRROR_main_process(input_time_interval,
+		new_input_graph, query_state_graph, alpha, L_for_upper_bound, Phi, Omega3, special_edges_graph, kappa_2, use_B_and_B);
+
+	Theta_M_T_M.first = change_reduced_tree_to_original_tree(Theta_M_T_M.first, newly_merged_edges);
+
+	return Theta_M_T_M;
+
+}
+#pragma endregion accelerated_MIRROR
+
+#pragma region
+pair<graph_hash_of_mixed_weighted, pair<int, int>> accelerated_S_MIRROR(pair<int, int> input_time_interval, graph_hash_of_mixed_weighted& input_graph,
+	graph_hash_of_mixed_weighted& query_state_graph, double alpha, double& kappa_1, int& reduced_V, int h, double& kappa_2, bool use_reudction, bool use_B_and_B) {
+
+	graph_hash_of_mixed_weighted new_input_graph = input_graph;
+
+	std::unordered_set<string> Omega3;
+	vector<pair<pair<int, int>, int>> Phi = sorted_selected_time_subintervals(input_time_interval, h, Omega3);
+
+	/*reduce input_graph, which is a copy here*/
+	graph_hash_of_mixed_weighted special_edges_graph;
+	unordered_map<string, pair<pair<int, int>, pair<int, int>>> newly_merged_edges; // string is the ID of a newly merged edge, the two pairs are the two edges that correspond to the newly merged edge
+	if (use_reudction) {
+		degree_0_1_2_test(input_time_interval, query_state_graph, new_input_graph, alpha, special_edges_graph, newly_merged_edges);
+	}
+
+	reduced_V = new_input_graph.hash_of_vectors.size();
+
+	pair<graph_hash_of_mixed_weighted, pair<int, int>> Theta_M_T_M = accelerated_MIRROR_main_process(input_time_interval,
+		new_input_graph, query_state_graph, alpha, kappa_1, Phi, Omega3, special_edges_graph, kappa_2, use_B_and_B);
+
+	Theta_M_T_M.first = change_reduced_tree_to_original_tree(Theta_M_T_M.first, newly_merged_edges);
+
+	return Theta_M_T_M;
+
+}
+#pragma endregion accelerated_S_MIRROR
+
+/*accelerated_H_MIRROR and accelerated_H_S_MIRROR*/
+
+#pragma region
+void accelerated_bfs_reduce_graph(pair<int, int>& input_time_interval, graph_hash_of_mixed_weighted& query_state_graph, graph_hash_of_mixed_weighted& input_graph, double alpha, int depth) {
+
+	update_nw_ec_most_generous_way(input_time_interval, query_state_graph, input_graph, alpha);
+
+	std::unordered_set<int> bfs_Vsub;
+	std::unordered_map<int, int> bfs_Vsub_depth;
+
+	for (auto it = input_graph.hash_of_vectors.begin(); it != input_graph.hash_of_vectors.end(); it++) {
+
+		if (it->second.vertex_weight > 0) {
+			std::queue<int> Q;
+			Q.push(it->first);
+			bfs_Vsub_depth[it->first] = 0; // the depth of root is 0
+
+			while (Q.size() > 0) {
+				int v = Q.front();
+				int v_depth = bfs_Vsub_depth[v];
+				Q.pop(); //Removing v from queue,whose neighbour will be visited now
+
+				if (v_depth > depth) {
+					continue;
+				}
+				bfs_Vsub.insert(v);
+
+				/*processing all the neighbours of v*/
+				auto search = input_graph.hash_of_hashs.find(v);
+				if (search != input_graph.hash_of_hashs.end()) {
+					for (auto it2 = search->second.begin(); it2 != search->second.end(); it2++) {
+						int adj_v = it2->first;
+						auto pointer_bfs_Vsub_depth_adj_v = bfs_Vsub_depth.find(adj_v);
+						if (pointer_bfs_Vsub_depth_adj_v == bfs_Vsub_depth.end()) { // adj_v has not been searched yet
+							bfs_Vsub_depth[adj_v] = v_depth + 1;
+							Q.push(adj_v);						
+						}
+						else if (pointer_bfs_Vsub_depth_adj_v->second > v_depth + 1) { // adj_v has been searched from a root more far away
+							pointer_bfs_Vsub_depth_adj_v->second = v_depth + 1;
+							Q.push(adj_v);
+						}
+					}
+				}
+				else {
+					auto search2 = input_graph.hash_of_vectors.find(v);
+					for (auto it2 = search2->second.adj_vertices.begin(); it2 != search2->second.adj_vertices.end(); it2++) {
+						int adj_v = it2->first;
+						auto pointer_bfs_Vsub_depth_adj_v = bfs_Vsub_depth.find(adj_v);
+						if (pointer_bfs_Vsub_depth_adj_v == bfs_Vsub_depth.end()) { // adj_v has not been searched yet
+							bfs_Vsub_depth[adj_v] = v_depth + 1;
+							Q.push(adj_v);
+						}
+						else if (pointer_bfs_Vsub_depth_adj_v->second > v_depth + 1) { // adj_v has been searched from a root more far away
+							pointer_bfs_Vsub_depth_adj_v->second = v_depth + 1;
+							Q.push(adj_v);
+						}
+					}
+				}
+
+			}
+		}
+	}
+
+	input_graph = graph_hash_of_mixed_weighted_extract_subgraph(input_graph, bfs_Vsub);
+
+	//graph_hash_of_mixed_weighted_print_size(input_graph);
+
+}
+#pragma endregion accelerated_bfs_reduce_graph
+
+#pragma region
+pair<graph_hash_of_mixed_weighted, pair<int, int>> accelerated_H_MIRROR(pair<int, int> input_time_interval, graph_hash_of_mixed_weighted& input_graph,
+	graph_hash_of_mixed_weighted& query_state_graph, double alpha, int depth) {
+
+	graph_hash_of_mixed_weighted new_input_graph = graph_hash_of_mixed_weighted_copy_graph(input_graph);
+
+	vector<pair<pair<int, int>, int>> Phi = sorted_all_time_subintervals(input_time_interval);
+	std::unordered_set<string> Omega3;
+	double kappa_2;
+
+	/*bfs reduce input_graph, which is a copy here*/
+	accelerated_bfs_reduce_graph(input_time_interval, query_state_graph, new_input_graph, alpha, depth);
+
+	/*reduce input_graph, which is a copy here*/
+	graph_hash_of_mixed_weighted special_edges_graph;
+	unordered_map<string, pair<pair<int, int>, pair<int, int>>> newly_merged_edges; // string is the ID of a newly merged edge, the two pairs are the two edges that correspond to the newly merged edge
+	degree_0_1_2_test(input_time_interval, query_state_graph, new_input_graph, alpha, special_edges_graph, newly_merged_edges);
+
+	double L_for_upper_bound;
+
+	pair<graph_hash_of_mixed_weighted, pair<int, int>> Theta_M_T_M = accelerated_MIRROR_main_process(input_time_interval,
+		new_input_graph, query_state_graph, alpha, L_for_upper_bound, Phi, Omega3, special_edges_graph, kappa_2, true);
+
+	Theta_M_T_M.first = change_reduced_tree_to_original_tree(Theta_M_T_M.first, newly_merged_edges);
+
+	return Theta_M_T_M;
+}
+#pragma endregion accelerated_H_MIRROR
+
+#pragma region
+pair<graph_hash_of_mixed_weighted, pair<int, int>> accelerated_H_S_MIRROR(pair<int, int> input_time_interval, graph_hash_of_mixed_weighted& input_graph,
+	graph_hash_of_mixed_weighted& query_state_graph, double alpha, int h, int depth) {
+
+	graph_hash_of_mixed_weighted new_input_graph = graph_hash_of_mixed_weighted_copy_graph(input_graph);
+
+	std::unordered_set<string> Omega3;
+	vector<pair<pair<int, int>, int>> Phi = sorted_selected_time_subintervals(input_time_interval, h, Omega3);
+	double kappa_2;
+
+	/*bfs reduce input_graph, which is a copy here*/
+	accelerated_bfs_reduce_graph(input_time_interval, query_state_graph, new_input_graph, alpha, depth);
+
+	/*reduce input_graph, which is a copy here*/
+	graph_hash_of_mixed_weighted special_edges_graph;
+	unordered_map<string, pair<pair<int, int>, pair<int, int>>> newly_merged_edges; // string is the ID of a newly merged edge, the two pairs are the two edges that correspond to the newly merged edge
+	degree_0_1_2_test(input_time_interval, query_state_graph, new_input_graph, alpha, special_edges_graph, newly_merged_edges);
+
+	double L_for_upper_bound;
+
+	pair<graph_hash_of_mixed_weighted, pair<int, int>> Theta_M_T_M = accelerated_MIRROR_main_process(input_time_interval,
+		new_input_graph, query_state_graph, alpha, L_for_upper_bound, Phi, Omega3, special_edges_graph, kappa_2, true);
+
+	Theta_M_T_M.first = change_reduced_tree_to_original_tree(Theta_M_T_M.first, newly_merged_edges);
+
+	return Theta_M_T_M;
+
+}
+#pragma endregion accelerated_H_S_MIRROR
+
+
+
+
 
 
 /*adapted static algorithms for hunting temporal bumps; first find sub-tree, then find pair of sub-tree and time sub-interval*/
@@ -1417,8 +1843,7 @@ pair<graph_hash_of_mixed_weighted, pair<int, int>> Smart_ST(pair<int, int> input
 #pragma endregion Smart_ST
 
 #pragma region
-pair<graph_hash_of_mixed_weighted, pair<int, int>> PCST(pair<int, int> input_time_interval, graph_hash_of_mixed_weighted& input_graph,
-	graph_hash_of_mixed_weighted& query_state_graph, double alpha) {
+pair<graph_hash_of_mixed_weighted, pair<int, int>> PCST(pair<int, int> input_time_interval, graph_hash_of_mixed_weighted& input_graph, graph_hash_of_mixed_weighted& query_state_graph, double alpha) {
 
 	std::list<std::list<int>> cpns = graph_hash_of_mixed_weighted_connected_components(input_graph);
 
@@ -2130,7 +2555,7 @@ void load_algorithms(pair<int, int> input_time_interval, graph_hash_of_mixed_wei
 	double& time_Smart_ST, double& weight_Smart_ST, double& time_Random_ST, double& weight_Random_ST,
 	double& time_BF_ST, double& weight_BF_ST, double& time_PCST, double& weight_PCST,
 	double& MIRROR_for_upper_bound, double& kappa_1, double& kappa_2, int& reduced_V, double& MIRROR_Basic_for_upper_bound, double& S_MIRROR_Basic_for_upper_bound,
-	bool use_MIRROR, bool use_S_MIRROR, bool use_H_MIRROR, bool use_H_S_MIRROR, bool use_MIRROR_Basic, bool use_S_MIRROR_Basic, 
+	bool use_MIRROR, bool use_S_MIRROR, bool use_H_MIRROR, bool use_H_S_MIRROR, bool use_MIRROR_Basic, bool use_S_MIRROR_Basic,
 	bool use_Smart_ST, bool use_Random_ST, bool use_BF_ST, bool use_PCST,
 	double& time_MIRROR_onlyreduction, double& weight_MIRROR_onlyreduction, double& time_S_MIRROR_onlyreduction, double& weight_S_MIRROR_onlyreduction,
 	double& time_MIRROR_onlyBandB, double& weight_MIRROR_onlyBandB, double& time_S_MIRROR_onlyBandB, double& weight_S_MIRROR_onlyBandB,
@@ -2138,8 +2563,8 @@ void load_algorithms(pair<int, int> input_time_interval, graph_hash_of_mixed_wei
 
 	if (use_MIRROR == true) {
 		auto begin1 = std::chrono::high_resolution_clock::now();
-		pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_MIRROR = MIRROR
-		({ input_time_interval.first, input_time_interval.second }, instance_graph, query_state_graph, alpha, MIRROR_for_upper_bound);
+		pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_MIRROR = accelerated_MIRROR
+		({ input_time_interval.first, input_time_interval.second }, instance_graph, query_state_graph, alpha, MIRROR_for_upper_bound, 1, 1);
 		auto end1 = std::chrono::high_resolution_clock::now();
 		time_MIRROR = std::chrono::duration_cast<std::chrono::nanoseconds>(end1 - begin1).count() / 1e9; // s
 		weight_MIRROR = net_weight_PCSTPTG_single_bump(solu_MIRROR.first, solu_MIRROR.second, query_state_graph, alpha);
@@ -2151,8 +2576,8 @@ void load_algorithms(pair<int, int> input_time_interval, graph_hash_of_mixed_wei
 
 	if (use_S_MIRROR == true) {
 		auto begin2 = std::chrono::high_resolution_clock::now();
-		pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_S_MIRROR = S_MIRROR
-		({ input_time_interval.first, input_time_interval.second }, instance_graph, query_state_graph, alpha, kappa_1, reduced_V, h, kappa_2);
+		pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_S_MIRROR = accelerated_S_MIRROR
+		({ input_time_interval.first, input_time_interval.second }, instance_graph, query_state_graph, alpha, kappa_1, reduced_V, h, kappa_2, 1, 1);
 		auto end2 = std::chrono::high_resolution_clock::now();
 		time_S_MIRROR = std::chrono::duration_cast<std::chrono::nanoseconds>(end2 - begin2).count() / 1e9; // s
 		weight_S_MIRROR = net_weight_PCSTPTG_single_bump(solu_S_MIRROR.first, solu_S_MIRROR.second, query_state_graph, alpha);
@@ -2164,7 +2589,7 @@ void load_algorithms(pair<int, int> input_time_interval, graph_hash_of_mixed_wei
 
 	if (use_H_MIRROR == true) {
 		auto begin1 = std::chrono::high_resolution_clock::now();
-		pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_MIRROR = H_MIRROR
+		pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_MIRROR = accelerated_H_MIRROR
 		({ input_time_interval.first, input_time_interval.second }, instance_graph, query_state_graph, alpha, depth);
 		auto end1 = std::chrono::high_resolution_clock::now();
 		time_H_MIRROR = std::chrono::duration_cast<std::chrono::nanoseconds>(end1 - begin1).count() / 1e9; // s
@@ -2177,7 +2602,7 @@ void load_algorithms(pair<int, int> input_time_interval, graph_hash_of_mixed_wei
 
 	if (use_H_S_MIRROR == true) {
 		auto begin2 = std::chrono::high_resolution_clock::now();
-		pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_S_MIRROR = H_S_MIRROR
+		pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_S_MIRROR = accelerated_H_S_MIRROR
 		({ input_time_interval.first, input_time_interval.second }, instance_graph, query_state_graph, alpha, h, depth);
 		auto end2 = std::chrono::high_resolution_clock::now();
 		time_H_S_MIRROR = std::chrono::duration_cast<std::chrono::nanoseconds>(end2 - begin2).count() / 1e9; // s
@@ -2190,8 +2615,9 @@ void load_algorithms(pair<int, int> input_time_interval, graph_hash_of_mixed_wei
 
 	if (use_MIRROR_Basic == true) {
 		auto begin1 = std::chrono::high_resolution_clock::now();
-		pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_MIRROR = MIRROR_Basic
-		({ input_time_interval.first, input_time_interval.second }, instance_graph, query_state_graph, alpha, MIRROR_Basic_for_upper_bound);
+		double x;
+		pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_MIRROR = accelerated_MIRROR
+		({ input_time_interval.first, input_time_interval.second }, instance_graph, query_state_graph, alpha, x, 0, 0);
 		auto end1 = std::chrono::high_resolution_clock::now();
 		time_MIRROR_Basic = std::chrono::duration_cast<std::chrono::nanoseconds>(end1 - begin1).count() / 1e9; // s
 		weight_MIRROR_Basic = net_weight_PCSTPTG_single_bump(solu_MIRROR.first, solu_MIRROR.second, query_state_graph, alpha);
@@ -2203,8 +2629,10 @@ void load_algorithms(pair<int, int> input_time_interval, graph_hash_of_mixed_wei
 
 	if (use_S_MIRROR_Basic == true) {
 		auto begin2 = std::chrono::high_resolution_clock::now();
-		pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_S_MIRROR = S_MIRROR_Basic
-		({ input_time_interval.first, input_time_interval.second }, instance_graph, query_state_graph, alpha, S_MIRROR_Basic_for_upper_bound, h);
+		double x, y;
+		int w;
+		pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_S_MIRROR = accelerated_S_MIRROR
+		({ input_time_interval.first, input_time_interval.second }, instance_graph, query_state_graph, alpha, x, w, h, y, 0, 0);
 		auto end2 = std::chrono::high_resolution_clock::now();
 		time_S_MIRROR_Basic = std::chrono::duration_cast<std::chrono::nanoseconds>(end2 - begin2).count() / 1e9; // s
 		weight_S_MIRROR_Basic = net_weight_PCSTPTG_single_bump(solu_S_MIRROR.first, solu_S_MIRROR.second, query_state_graph, alpha);
@@ -2217,8 +2645,8 @@ void load_algorithms(pair<int, int> input_time_interval, graph_hash_of_mixed_wei
 	if (use_MIRROR_onlyreduction == true) {
 		auto begin1 = std::chrono::high_resolution_clock::now();
 		double x;
-		pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_MIRROR = MIRROR_onlyreduction
-		({ input_time_interval.first, input_time_interval.second }, instance_graph, query_state_graph, alpha, x);
+		pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_MIRROR = accelerated_MIRROR
+		({ input_time_interval.first, input_time_interval.second }, instance_graph, query_state_graph, alpha, x, 1, 0);
 		auto end1 = std::chrono::high_resolution_clock::now();
 		time_MIRROR_onlyreduction = std::chrono::duration_cast<std::chrono::nanoseconds>(end1 - begin1).count() / 1e9; // s
 		weight_MIRROR_onlyreduction = net_weight_PCSTPTG_single_bump(solu_MIRROR.first, solu_MIRROR.second, query_state_graph, alpha);
@@ -2232,8 +2660,8 @@ void load_algorithms(pair<int, int> input_time_interval, graph_hash_of_mixed_wei
 		auto begin1 = std::chrono::high_resolution_clock::now();
 		double x, y;
 		int w;
-		pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_MIRROR = S_MIRROR_onlyreduction
-		({ input_time_interval.first, input_time_interval.second }, instance_graph, query_state_graph, alpha, x, w, h, y);
+		pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_MIRROR = accelerated_S_MIRROR
+		({ input_time_interval.first, input_time_interval.second }, instance_graph, query_state_graph, alpha, x, w, h, y, 1, 0);
 		auto end1 = std::chrono::high_resolution_clock::now();
 		time_S_MIRROR_onlyreduction = std::chrono::duration_cast<std::chrono::nanoseconds>(end1 - begin1).count() / 1e9; // s
 		weight_S_MIRROR_onlyreduction = net_weight_PCSTPTG_single_bump(solu_MIRROR.first, solu_MIRROR.second, query_state_graph, alpha);
@@ -2246,8 +2674,8 @@ void load_algorithms(pair<int, int> input_time_interval, graph_hash_of_mixed_wei
 	if (use_MIRROR_onlyBandB == true) {
 		auto begin1 = std::chrono::high_resolution_clock::now();
 		double x;
-		pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_MIRROR = MIRROR_onlyBandB
-		({ input_time_interval.first, input_time_interval.second }, instance_graph, query_state_graph, alpha, x);
+		pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_MIRROR = accelerated_MIRROR
+		({ input_time_interval.first, input_time_interval.second }, instance_graph, query_state_graph, alpha, x, 0, 1);
 		auto end1 = std::chrono::high_resolution_clock::now();
 		time_MIRROR_onlyBandB = std::chrono::duration_cast<std::chrono::nanoseconds>(end1 - begin1).count() / 1e9; // s
 		weight_MIRROR_onlyBandB = net_weight_PCSTPTG_single_bump(solu_MIRROR.first, solu_MIRROR.second, query_state_graph, alpha);
@@ -2261,8 +2689,8 @@ void load_algorithms(pair<int, int> input_time_interval, graph_hash_of_mixed_wei
 		auto begin1 = std::chrono::high_resolution_clock::now();
 		double x, y;
 		int w;
-		pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_MIRROR = S_MIRROR_onlyBandB
-		({ input_time_interval.first, input_time_interval.second }, instance_graph, query_state_graph, alpha, x, w, h, y);
+		pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_MIRROR = accelerated_S_MIRROR
+		({ input_time_interval.first, input_time_interval.second }, instance_graph, query_state_graph, alpha, x, w, h, y, 0, 1);
 		auto end1 = std::chrono::high_resolution_clock::now();
 		time_S_MIRROR_onlyBandB = std::chrono::duration_cast<std::chrono::nanoseconds>(end1 - begin1).count() / 1e9; // s
 		weight_S_MIRROR_onlyBandB = net_weight_PCSTPTG_single_bump(solu_MIRROR.first, solu_MIRROR.second, query_state_graph, alpha);
@@ -2351,8 +2779,8 @@ void experiment_element(string data_name, string save_name, int V, int m, double
 		<< "time_MIRROR_Basic,weight_MIRROR_Basic,time_S_MIRROR_Basic,weight_S_MIRROR_Basic,"
 		<< "time_Smart_ST,weight_Smart_ST,time_Random_ST,weight_Random_ST,time_BF_ST,weight_BF_ST,time_PCST,weight_PCST,"
 		<< "MIRROR_UB,S_MIRROR_UB,MIRROR_Basic_UB,S_MIRROR_Basic_UB,"
-	    << "time_MIRROR_onlyreduction,weight_MIRROR_onlyreduction,time_S_MIRROR_onlyreduction,weight_S_MIRROR_onlyreduction,"
-	    << "time_MIRROR_onlyBandB,weight_MIRROR_onlyBandB,time_S_MIRROR_onlyBandB,weight_S_MIRROR_onlyBandB" << endl;
+		<< "time_MIRROR_onlyreduction,weight_MIRROR_onlyreduction,time_S_MIRROR_onlyreduction,weight_S_MIRROR_onlyreduction,"
+		<< "time_MIRROR_onlyBandB,weight_MIRROR_onlyBandB,time_S_MIRROR_onlyBandB,weight_S_MIRROR_onlyBandB" << endl;
 
 	/*read data*/
 	graph_hash_of_mixed_weighted old_instance_graph, old_query_state_graph;
@@ -2527,7 +2955,7 @@ void parallel_experiments() {
 			threads.emplace_back(std::thread(experiment_element, "NY", "experiment_NY_vary_m_3.csv", V, 120, alpha, p, q, intensive_query, iteration_times, h, depth, s,
 				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0));
 		}
-		
+
 		/*vary alpha*/
 		if (1) {
 			threads.emplace_back(std::thread(experiment_element, "NY", "experiment_NY_vary_alpha_1.csv", V, m, 0.6, p, q, intensive_query, iteration_times, h, depth, s,
@@ -2814,6 +3242,1775 @@ void parallel_experiments() {
 }
 #pragma endregion parallel_experiments
 
+#pragma region
+void partial_parallel_experiments() {
+
+	std::vector<std::thread> threads;
+
+	/*Reddit main intensive; 44 threads; 70G RAM*/
+	if (1) {
+
+		int iteration_times = 50;
+
+		bool intensive_query = true;
+
+		int V = 1763279, m = 40, h = 1, depth = 2, s = 3;
+
+		double alpha = 1, p = 1, q = 0;
+
+		bool use_MIRROR = 1, use_S_MIRROR = 1, use_H_MIRROR = 1, use_H_S_MIRROR = 1, use_MIRROR_Basic = 0, use_S_MIRROR_Basic = 0, use_Smart_ST = 1, use_Random_ST = 1, use_BF_ST = 1, use_PCST = 1;
+
+
+		/*vary V*/
+		if (1) {
+			for (int ii = 1; ii <= 2; ii++) {
+				threads.emplace_back(std::thread(experiment_element, "Reddit", "experiment_Reddit_vary_V_2_" + to_string(ii) + ".csv", 1163279, m, alpha, p, q, intensive_query, iteration_times / 2, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0));
+				threads.emplace_back(std::thread(experiment_element, "Reddit", "experiment_Reddit_vary_V_3_" + to_string(ii) + ".csv", 1463279, m, alpha, p, q, intensive_query, iteration_times / 2, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0));
+				threads.emplace_back(std::thread(experiment_element, "Reddit", "experiment_Reddit_base_" + to_string(ii) + ".csv", V, m, alpha, p, q, intensive_query, iteration_times / 2, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0));
+			}
+		}
+
+		/*vary m*/
+		if (1) {
+			for (int ii = 1; ii <= 2; ii++) {
+				threads.emplace_back(std::thread(experiment_element, "Reddit", "experiment_Reddit_vary_m_2_" + to_string(ii) + ".csv", V, 25, alpha, p, q, intensive_query, iteration_times / 2, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0));
+			}
+		}
+
+		/*vary alpha*/
+		if (1) {
+			for (int ii = 1; ii <= 2; ii++) {
+				threads.emplace_back(std::thread(experiment_element, "Reddit", "experiment_Reddit_vary_alpha_1_" + to_string(ii) + ".csv", V, m, 0.6, p, q, intensive_query, iteration_times / 2, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0));
+				threads.emplace_back(std::thread(experiment_element, "Reddit", "experiment_Reddit_vary_alpha_2_" + to_string(ii) + ".csv", V, m, 0.8, p, q, intensive_query, iteration_times / 2, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0));
+				threads.emplace_back(std::thread(experiment_element, "Reddit", "experiment_Reddit_vary_alpha_3_" + to_string(ii) + ".csv", V, m, 1.2, p, q, intensive_query, iteration_times / 2, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0));
+			}
+		}
+
+		/*vary p*/
+		if (1) {
+			for (int ii = 1; ii <= 2; ii++) {
+				threads.emplace_back(std::thread(experiment_element, "Reddit", "experiment_Reddit_vary_p_1_" + to_string(ii) + ".csv", V, m, alpha, 0.5, q, intensive_query, iteration_times / 2, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0));
+				threads.emplace_back(std::thread(experiment_element, "Reddit", "experiment_Reddit_vary_p_2_" + to_string(ii) + ".csv", V, m, alpha, 1.5, q, intensive_query, iteration_times / 2, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0));
+				threads.emplace_back(std::thread(experiment_element, "Reddit", "experiment_Reddit_vary_p_3_" + to_string(ii) + ".csv", V, m, alpha, 2, q, intensive_query, iteration_times / 2, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0));
+			}
+		}
+
+	}
+
+	for (auto& th : threads)
+		th.join();
+
+
+}
+#pragma endregion partial_parallel_experiments
+
+#pragma region
+void ThreadPool_experiments() {
+
+
+	int pool_size = 40; // 200 GB max for 40 threads
+
+	ThreadPool pool(pool_size); // use pool_size threads
+	std::vector< std::future<int> > results;
+
+
+
+	/*NY*/
+	if (0) {
+
+		int iteration_times = 100;
+
+		bool intensive_query = true;
+
+		int V = 77580, m = 72, h = 1, depth = 1, s = 10;
+
+		double alpha = 1, p = 1, q = 0;
+
+		bool use_MIRROR = 1, use_S_MIRROR = 1, use_H_MIRROR = 1, use_H_S_MIRROR = 1, use_MIRROR_Basic = 0, use_S_MIRROR_Basic = 0, use_Smart_ST = 1, use_Random_ST = 1, use_BF_ST = 1, use_PCST = 1;
+
+		/*vary V*/
+		if (1) {
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_vary_V_1.csv", 47580, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+				return 1; }));
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_vary_V_2.csv", 57580, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+				return 1; }));
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_vary_V_3.csv", 67580, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+				return 1; }));
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_base.csv", V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+				return 1; }));
+		}
+
+		/*vary m*/
+		if (1) {
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_vary_m_1.csv", V, 48, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+				return 1; }));
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_vary_m_2.csv", V, 96, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+				return 1; }));
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_vary_m_3.csv", V, 120, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+				return 1; }));
+		}
+
+		/*vary alpha*/
+		if (1) {
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_vary_alpha_1.csv", V, m, 0.6, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+				return 1; }));
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_vary_alpha_2.csv", V, m, 0.8, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+				return 1; }));
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_vary_alpha_3.csv", V, m, 1.2, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+				return 1; }));
+		}
+
+		/*vary p*/
+		if (1) {
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_vary_p_1.csv", V, m, alpha, 0.5, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+				return 1; }));
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_vary_p_2.csv", V, m, alpha, 1.5, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+				return 1; }));
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_vary_p_3.csv", V, m, alpha, 2, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+				return 1; }));
+		}
+
+		/*vary h*/
+		if (1) {
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_vary_h_1.csv", V, m, alpha, p, q, intensive_query, iteration_times, 0, depth, s,
+					0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+				return 1; }));
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_vary_h_2.csv", V, m, alpha, p, q, intensive_query, iteration_times, 2, depth, s,
+					0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+				return 1; }));
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_vary_h_3.csv", V, m, alpha, p, q, intensive_query, iteration_times, 3, depth, s,
+					0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+				return 1; }));
+		}
+
+		/*vary depth*/
+		if (1) {
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_vary_b_1.csv", V, m, alpha, p, q, intensive_query, iteration_times, h, 0, s,
+					0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+				return 1; }));
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_vary_b_2.csv", V, m, alpha, p, q, intensive_query, iteration_times, h, 2, s,
+					0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+				return 1; }));
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_vary_b_3.csv", V, m, alpha, p, q, intensive_query, iteration_times, h, 3, s,
+					0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+				return 1; }));
+		}
+
+		/*vary s*/
+		if (1) {
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_vary_s_1.csv", V, m, alpha, p, q, intensive_query, iteration_times, h, depth, 1,
+					0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0);
+				return 1; }));
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_vary_s_2.csv", V, m, alpha, p, q, intensive_query, iteration_times, h, depth, 4,
+					0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0);
+				return 1; }));
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_vary_s_3.csv", V, m, alpha, p, q, intensive_query, iteration_times, h, depth, 7,
+					0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0);
+				return 1; }));
+		}
+
+		/*compare Basic*/
+		if (1) {
+			iteration_times = 5;
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("NY", "experiment_NY_compare_basic.csv", V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1);
+				return 1; }));
+		}
+
+	}
+
+
+
+
+	/*Reddit*/
+	if (1) {
+
+		int iteration_times = 100;
+
+		bool intensive_query = true;
+
+		int V = 1763279, m = 40, h = 1, depth = 1, s = 4;
+
+		double alpha = 1, p = 1, q = 0;
+
+		bool use_MIRROR = 1, use_S_MIRROR = 1, use_H_MIRROR = 1, use_H_S_MIRROR = 1, use_MIRROR_Basic = 0, use_S_MIRROR_Basic = 0, use_Smart_ST = 1, use_Random_ST = 1, use_BF_ST = 1, use_PCST = 1;
+
+
+		/*vary V*/
+		if (1) {
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("Reddit", "experiment_Reddit_vary_V_1.csv", 863279, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+				return 1; }));
+			for (int ii = 1; ii <= 5; ii++) {
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Reddit", "experiment_Reddit_vary_V_2_" + to_string(ii) + ".csv", 1163279, m, alpha, p, q, intensive_query, iteration_times / 2, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Reddit", "experiment_Reddit_vary_V_3_" + to_string(ii) + ".csv", 1463279, m, alpha, p, q, intensive_query, iteration_times / 2, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Reddit", "experiment_Reddit_base_" + to_string(ii) + ".csv", V, m, alpha, p, q, intensive_query, iteration_times / 2, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+			}
+		}
+
+		/*vary m*/
+		if (1) {
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("Reddit", "experiment_Reddit_vary_m_1.csv", V, 10, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+				return 1; }));
+			for (int ii = 1; ii <= 5; ii++) {
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Reddit", "experiment_Reddit_vary_m_2_" + to_string(ii) + ".csv", V, 25, alpha, p, q, intensive_query, iteration_times / 5, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Reddit", "experiment_Reddit_vary_m_3_" + to_string(ii) + ".csv", V, 55, alpha, p, q, intensive_query, iteration_times / 5, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+			}
+
+		}
+
+		/*vary alpha*/
+		if (1) {
+			for (int ii = 1; ii <= 5; ii++) {
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Reddit", "experiment_Reddit_vary_alpha_1_" + to_string(ii) + ".csv", V, m, 0.6, p, q, intensive_query, iteration_times / 5, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Reddit", "experiment_Reddit_vary_alpha_2_" + to_string(ii) + ".csv", V, m, 0.8, p, q, intensive_query, iteration_times / 5, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Reddit", "experiment_Reddit_vary_alpha_3_" + to_string(ii) + ".csv", V, m, 1.2, p, q, intensive_query, iteration_times / 5, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+			}
+		}
+
+		/*vary p*/
+		if (1) {
+			for (int ii = 1; ii <= 5; ii++) {
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Reddit", "experiment_Reddit_vary_p_1_" + to_string(ii) + ".csv", V, m, alpha, 0.5, q, intensive_query, iteration_times / 5, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Reddit", "experiment_Reddit_vary_p_2_" + to_string(ii) + ".csv", V, m, alpha, 1.5, q, intensive_query, iteration_times / 5, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Reddit", "experiment_Reddit_vary_p_3_" + to_string(ii) + ".csv", V, m, alpha, 2, q, intensive_query, iteration_times / 5, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+			}
+		}
+
+		/*vary h*/
+		if (1) {
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("Reddit", "experiment_Reddit_vary_h_1.csv", V, m, alpha, p, q, intensive_query, iteration_times, 0, depth, s,
+					0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+				return 1; }));
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("Reddit", "experiment_Reddit_vary_h_2.csv", V, m, alpha, p, q, intensive_query, iteration_times, 2, depth, s,
+					0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+				return 1; }));
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("Reddit", "experiment_Reddit_vary_h_3.csv", V, m, alpha, p, q, intensive_query, iteration_times, 3, depth, s,
+					0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+				return 1; }));
+		}
+
+		/*vary depth*/
+		if (1) {
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("Reddit", "experiment_Reddit_vary_b_1.csv", V, m, alpha, p, q, intensive_query, iteration_times, h, 0, s,
+					0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+				return 1; }));
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("Reddit", "experiment_Reddit_vary_b_2.csv", V, m, alpha, p, q, intensive_query, iteration_times, h, 2, s,
+					0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+				return 1; }));
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("Reddit", "experiment_Reddit_vary_b_3.csv", V, m, alpha, p, q, intensive_query, iteration_times, h, 3, s,
+					0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+				return 1; }));
+		}
+
+		/*vary s*/
+		if (1) {
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("Reddit", "experiment_Reddit_vary_s_1.csv", V, m, alpha, p, q, intensive_query, iteration_times, h, depth, 1,
+					0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0);
+				return 1; }));
+			for (int ii = 1; ii <= 5; ii++) {
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Reddit", "experiment_Reddit_vary_s_2_" + to_string(ii) + ".csv", V, m, alpha, p, q, intensive_query, iteration_times / 5, h, depth, 2,
+						0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0);
+					return 1; }));
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Reddit", "experiment_Reddit_vary_s_3_" + to_string(ii) + ".csv", V, m, alpha, p, q, intensive_query, iteration_times / 5, h, depth, 3,
+						0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0);
+					return 1; }));
+			}
+		}
+
+		/*compare Basic*/
+		if (1) {
+			iteration_times = 3;
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("Reddit", "experiment_Reddit_compare_basic.csv", V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1);
+				return 1; }));
+		}
+
+	}
+
+
+
+
+	/*Wiki*/
+	if (0) {
+
+		int iteration_times = 100;
+
+		bool intensive_query = true;
+
+		int V = 1176192, m = 40, h = 1, depth = 1, s = 7;
+
+		double alpha = 1, p = 1, q = 0;
+
+		bool use_MIRROR = 1, use_S_MIRROR = 1, use_H_MIRROR = 1, use_H_S_MIRROR = 1, use_MIRROR_Basic = 0, use_S_MIRROR_Basic = 0, use_Smart_ST = 1, use_Random_ST = 1, use_BF_ST = 1, use_PCST = 1;
+
+		/*compare Basic*/
+		if (1) {
+			for (int ii = 1; ii <= 2; ii++) {
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Wiki", "experiment_Wiki_compare_basic_" + to_string(ii) + ".csv", V, m, alpha, p, q, intensive_query, 1, h, depth, s,
+						0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1);
+					return 1; }));
+			}
+		}
+
+
+		/*vary V*/
+		if (1) {
+			for (int ii = 1; ii <= 2; ii++) {
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Wiki", "experiment_Wiki_vary_V_1_" + to_string(ii) + ".csv", 576192, m, alpha, p, q, intensive_query, iteration_times / 2, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Wiki", "experiment_Wiki_vary_V_2_" + to_string(ii) + ".csv", 776192, m, alpha, p, q, intensive_query, iteration_times / 2, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Wiki", "experiment_Wiki_vary_V_3_" + to_string(ii) + ".csv", 976192, m, alpha, p, q, intensive_query, iteration_times / 2, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Wiki", "experiment_Wiki_base_" + to_string(ii) + ".csv", V, m, alpha, p, q, intensive_query, iteration_times / 2, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+			}
+		}
+
+		/*vary m*/
+		if (1) {
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("Wiki", "experiment_Wiki_vary_m_1.csv", V, 10, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+				return 1; }));
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("Wiki", "experiment_Wiki_vary_m_2.csv", V, 25, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+				return 1; }));
+			for (int ii = 1; ii <= 5; ii++) {
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Wiki", "experiment_Wiki_vary_m_3_" + to_string(ii) + ".csv", V, 55, alpha, p, q, intensive_query, iteration_times / 5, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+			}
+		}
+
+		/*vary alpha*/
+		if (1) {
+			for (int ii = 1; ii <= 2; ii++) {
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Wiki", "experiment_Wiki_vary_alpha_1_" + to_string(ii) + ".csv", V, m, 0.6, p, q, intensive_query, iteration_times / 2, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Wiki", "experiment_Wiki_vary_alpha_2_" + to_string(ii) + ".csv", V, m, 0.8, p, q, intensive_query, iteration_times / 2, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Wiki", "experiment_Wiki_vary_alpha_3_" + to_string(ii) + ".csv", V, m, 1.2, p, q, intensive_query, iteration_times / 2, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+			}
+		}
+
+		/*vary p*/
+		if (1) {
+			for (int ii = 1; ii <= 5; ii++) {
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Wiki", "experiment_Wiki_vary_p_1_" + to_string(ii) + ".csv", V, m, alpha, 0.5, q, intensive_query, iteration_times / 5, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Wiki", "experiment_Wiki_vary_p_2_" + to_string(ii) + ".csv", V, m, alpha, 1.5, q, intensive_query, iteration_times / 5, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Wiki", "experiment_Wiki_vary_p_3_" + to_string(ii) + ".csv", V, m, alpha, 2, q, intensive_query, iteration_times / 5, h, depth, s,
+						use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST, 0, 0, 0, 0);
+					return 1; }));
+			}
+		}
+
+
+		/*vary h*/
+		if (1) {
+			for (int ii = 1; ii <= 2; ii++) {
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Wiki", "experiment_Wiki_vary_h_1_" + to_string(ii) + ".csv", V, m, alpha, p, q, intensive_query, iteration_times / 2, 0, depth, s,
+						0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+					return 1; }));
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Wiki", "experiment_Wiki_vary_h_2_" + to_string(ii) + ".csv", V, m, alpha, p, q, intensive_query, iteration_times / 2, 2, depth, s,
+						0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+					return 1; }));
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Wiki", "experiment_Wiki_vary_h_3_" + to_string(ii) + ".csv", V, m, alpha, p, q, intensive_query, iteration_times / 2, 3, depth, s,
+						0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+					return 1; }));
+			}
+		}
+
+		/*vary depth*/
+		if (1) {
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("Wiki", "experiment_Wiki_vary_b_1.csv", V, m, alpha, p, q, intensive_query, iteration_times, h, 0, s,
+					0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+				return 1; }));
+			for (int ii = 1; ii <= 2; ii++) {
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Wiki", "experiment_Wiki_vary_b_2_" + to_string(ii) + ".csv", V, m, alpha, p, q, intensive_query, iteration_times / 2, h, 2, s,
+						0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+					return 1; }));
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Wiki", "experiment_Wiki_vary_b_3_" + to_string(ii) + ".csv", V, m, alpha, p, q, intensive_query, iteration_times / 2, h, 3, s,
+						0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+					return 1; }));
+			}
+		}
+
+
+		/*vary s*/
+		if (1) {
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("Wiki", "experiment_Wiki_vary_s_1.csv", V, m, alpha, p, q, intensive_query, iteration_times, h, depth, 1,
+					0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0);
+				return 1; }));
+			results.emplace_back(pool.enqueue([V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+				use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+				experiment_element("Wiki", "experiment_Wiki_vary_s_2.csv", V, m, alpha, p, q, intensive_query, iteration_times, h, depth, 4,
+					0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0);
+				return 1; }));
+			for (int ii = 1; ii <= 2; ii++) {
+				results.emplace_back(pool.enqueue([ii, V, m, alpha, p, q, intensive_query, iteration_times, h, depth, s,
+					use_MIRROR, use_S_MIRROR, use_H_MIRROR, use_H_S_MIRROR, use_MIRROR_Basic, use_S_MIRROR_Basic, use_Smart_ST, use_Random_ST, use_BF_ST, use_PCST] {
+					experiment_element("Wiki", "experiment_Wiki_vary_s_3_" + to_string(ii) + ".csv", V, m, alpha, p, q, intensive_query, iteration_times / 2, h, depth, 10,
+						0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0);
+					return 1; }));
+			}
+		}
+
+	}
+
+
+
+
+}
+#pragma endregion ThreadPool_experiments
+
+
+
+
+
+/*debug codes*/
+
+#pragma region
+void simple_iterative_tests() {
+
+	/*parameters*/
+	int iteration_times = 100;
+	int V = 1000, E = 5000, precision = 1, time_slot_num = 48, query_state_graph_E = 2000;
+	double alpha, ec_min = 1, ec_max = 10, nw_min = 1, nw_max = 10;
+
+	double solution_weight_MIRROR_sum = 0, solution_weight_accelerated_MIRROR_sum = 0, solution_weight_S_MIRROR_sum = 0, solution_weight_accelerated_S_MIRROR_sum = 0,
+		solution_weight_H_MIRROR_sum = 0, solution_weight_H_S_MIRROR_sum = 0, solution_weight_accelerated_H_MIRROR_sum = 0, solution_weight_accelerated_H_S_MIRROR_sum = 0,
+		solution_weight_Smart_ST_sum = 0, solution_weight_Random_ST_sum = 0,
+		solution_weight_BF_ST_sum = 0, solution_weight_PCST_sum = 0;
+	double time_MIRROR_avg = 0, time_accelerated_MIRROR_avg = 0, time_S_MIRROR_avg = 0, time_accelerated_S_MIRROR_avg = 0, time_H_MIRROR_avg = 0, time_H_S_MIRROR_avg = 0,
+		time_accelerated_H_MIRROR_avg = 0, time_accelerated_H_S_MIRROR_avg = 0,
+		time_Smart_ST_avg = 0, time_Random_ST_avg = 0, time_BF_ST_avg = 0, time_PCST_avg = 0;
+
+
+	/*iteration*/
+	for (int i = 0; i < iteration_times; i++) {
+
+		alpha = (double)(rand() % 11) / 10;
+
+		/*input and output*/
+		int generate_new_graph = 1;
+		graph_hash_of_mixed_weighted instance_graph, query_state_graph;
+		if (generate_new_graph == 1) {
+			instance_graph = graph_hash_of_mixed_weighted_generate_random_graph(V, E, nw_min, nw_max, ec_min, ec_max, precision);
+			query_state_graph = graph_hash_of_mixed_weighted_generate_random_query_state_graph(V, time_slot_num, query_state_graph_E);
+			//graph_hash_of_mixed_weighted_print(instance_graph);
+			graph_hash_of_mixed_weighted_save_graph_with_weight("instance_graph.txt", instance_graph, alpha);
+			graph_hash_of_mixed_weighted_save_graph_with_weight("query_state_graph.txt", query_state_graph, alpha);
+		}
+		else {
+			graph_hash_of_mixed_weighted_read_graph_with_weight("instance_graph.txt", instance_graph,
+				alpha);
+			graph_hash_of_mixed_weighted_read_graph_with_weight("query_state_graph.txt", query_state_graph,
+				alpha);
+			//graph_hash_of_mixed_weighted_print(instance_graph);
+		}
+
+		//cout << "iteration_times: " << i << endl;
+		//graph_hash_of_mixed_weighted_print(query_state_graph);
+
+
+		if (0) {
+			auto begin1 = std::chrono::high_resolution_clock::now();
+			double L_for_upper_bound;
+			pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_MIRROR = MIRROR
+			({ V, V + time_slot_num - 1 }, instance_graph, query_state_graph, alpha, L_for_upper_bound);
+			auto end1 = std::chrono::high_resolution_clock::now();
+			double runningtime1 = std::chrono::duration_cast<std::chrono::nanoseconds>(end1 - begin1).count() / 1e9; // s
+			time_MIRROR_avg = time_MIRROR_avg + (double)runningtime1 / iteration_times;
+			double weight_MIRROR = net_weight_PCSTPTG_single_bump(solu_MIRROR.first, solu_MIRROR.second, query_state_graph, alpha);
+			solution_weight_MIRROR_sum = solution_weight_MIRROR_sum + weight_MIRROR;
+			//graph_hash_of_mixed_weighted_print(solu_MIRROR.first);
+			//getchar();
+			if (graph_hash_of_mixed_weighted_graph1_is_in_graph2(solu_MIRROR.first, instance_graph) == false) {
+				cout << "this is an anomly!" << endl;
+				getchar();
+			}
+		}
+
+		if (0) {
+			auto begin1 = std::chrono::high_resolution_clock::now();
+			double L_for_upper_bound;
+			pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_MIRROR = accelerated_MIRROR
+			({ V, V + time_slot_num - 1 }, instance_graph, query_state_graph, alpha, L_for_upper_bound, 1, 1);
+			auto end1 = std::chrono::high_resolution_clock::now();
+			double runningtime1 = std::chrono::duration_cast<std::chrono::nanoseconds>(end1 - begin1).count() / 1e9; // s
+			time_accelerated_MIRROR_avg = time_accelerated_MIRROR_avg + (double)runningtime1 / iteration_times;
+			double weight_MIRROR = net_weight_PCSTPTG_single_bump(solu_MIRROR.first, solu_MIRROR.second, query_state_graph, alpha);
+			solution_weight_accelerated_MIRROR_sum = solution_weight_accelerated_MIRROR_sum + weight_MIRROR;
+			//graph_hash_of_mixed_weighted_print(solu_MIRROR.first);
+			//getchar();
+			if (graph_hash_of_mixed_weighted_graph1_is_in_graph2(solu_MIRROR.first, instance_graph) == false) {
+				cout << "this is an anomly!" << endl;
+				getchar();
+			}
+		}
+
+
+		if (0) {
+			auto begin2 = std::chrono::high_resolution_clock::now();
+			int reduced_V;
+			double kappa_1, kappa_2;;
+			pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_S_MIRROR = S_MIRROR
+			({ V, V + time_slot_num - 1 }, instance_graph, query_state_graph, alpha, kappa_1, reduced_V, 1, kappa_2);
+			auto end2 = std::chrono::high_resolution_clock::now();
+			double runningtime2 = std::chrono::duration_cast<std::chrono::nanoseconds>(end2 - begin2).count() / 1e9; // s
+			time_S_MIRROR_avg = time_S_MIRROR_avg + (double)runningtime2 / iteration_times;
+			double weight_S_MIRROR = net_weight_PCSTPTG_single_bump(solu_S_MIRROR.first, solu_S_MIRROR.second, query_state_graph, alpha);
+			solution_weight_S_MIRROR_sum = solution_weight_S_MIRROR_sum + weight_S_MIRROR;
+
+			if (graph_hash_of_mixed_weighted_graph1_is_in_graph2(solu_S_MIRROR.first, instance_graph) == false) {
+				cout << "this is an anomly!" << endl;
+				getchar();
+			}
+		}
+
+		if (0) {
+			auto begin2 = std::chrono::high_resolution_clock::now();
+			int reduced_V;
+			double kappa_1, kappa_2;;
+			pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_S_MIRROR = accelerated_S_MIRROR
+			({ V, V + time_slot_num - 1 }, instance_graph, query_state_graph, alpha, kappa_1, reduced_V, 1, kappa_2, 1, 1);
+			auto end2 = std::chrono::high_resolution_clock::now();
+			double runningtime2 = std::chrono::duration_cast<std::chrono::nanoseconds>(end2 - begin2).count() / 1e9; // s
+			time_accelerated_S_MIRROR_avg = time_accelerated_S_MIRROR_avg + (double)runningtime2 / iteration_times;
+			double weight_S_MIRROR = net_weight_PCSTPTG_single_bump(solu_S_MIRROR.first, solu_S_MIRROR.second, query_state_graph, alpha);
+			solution_weight_accelerated_S_MIRROR_sum = solution_weight_accelerated_S_MIRROR_sum + weight_S_MIRROR;
+
+			if (graph_hash_of_mixed_weighted_graph1_is_in_graph2(solu_S_MIRROR.first, instance_graph) == false) {
+				cout << "this is an anomly!" << endl;
+				getchar();
+			}
+		}
+
+
+		if (0) {
+			auto begin1 = std::chrono::high_resolution_clock::now();
+			double L_for_upper_bound;
+			pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_H_MIRROR = H_MIRROR
+			({ V, V + time_slot_num - 1 }, instance_graph, query_state_graph, alpha, 3);
+			auto end1 = std::chrono::high_resolution_clock::now();
+			double runningtime1 = std::chrono::duration_cast<std::chrono::nanoseconds>(end1 - begin1).count() / 1e9; // s
+			time_H_MIRROR_avg = time_H_MIRROR_avg + (double)runningtime1 / iteration_times;
+			double weight_H_MIRROR = net_weight_PCSTPTG_single_bump(solu_H_MIRROR.first, solu_H_MIRROR.second, query_state_graph, alpha);
+			solution_weight_H_MIRROR_sum = solution_weight_H_MIRROR_sum + weight_H_MIRROR;
+
+			if (graph_hash_of_mixed_weighted_graph1_is_in_graph2(solu_H_MIRROR.first, instance_graph) == false) {
+				cout << "this is an anomly!" << endl;
+				getchar();
+			}
+		}
+
+		if (0) {
+			auto begin1 = std::chrono::high_resolution_clock::now();
+			double L_for_upper_bound;
+			pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_H_MIRROR = accelerated_H_MIRROR
+			({ V, V + time_slot_num - 1 }, instance_graph, query_state_graph, alpha, 3);
+			auto end1 = std::chrono::high_resolution_clock::now();
+			double runningtime1 = std::chrono::duration_cast<std::chrono::nanoseconds>(end1 - begin1).count() / 1e9; // s
+			time_accelerated_H_MIRROR_avg = time_accelerated_H_MIRROR_avg + (double)runningtime1 / iteration_times;
+			double weight_H_MIRROR = net_weight_PCSTPTG_single_bump(solu_H_MIRROR.first, solu_H_MIRROR.second, query_state_graph, alpha);
+			solution_weight_accelerated_H_MIRROR_sum = solution_weight_accelerated_H_MIRROR_sum + weight_H_MIRROR;
+
+			if (graph_hash_of_mixed_weighted_graph1_is_in_graph2(solu_H_MIRROR.first, instance_graph) == false) {
+				cout << "this is an anomly!" << endl;
+				getchar();
+			}
+		}
+
+		if (0) {
+			auto begin2 = std::chrono::high_resolution_clock::now();
+			double SMIRROR_value_for_upper_bound;
+			pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_H_S_MIRROR = H_S_MIRROR
+			({ V, V + time_slot_num - 1 }, instance_graph, query_state_graph, alpha, 1, 3);
+			auto end2 = std::chrono::high_resolution_clock::now();
+			double runningtime2 = std::chrono::duration_cast<std::chrono::nanoseconds>(end2 - begin2).count() / 1e9; // s
+			time_H_S_MIRROR_avg = time_H_S_MIRROR_avg + (double)runningtime2 / iteration_times;
+			double weight_H_S_MIRROR = net_weight_PCSTPTG_single_bump(solu_H_S_MIRROR.first, solu_H_S_MIRROR.second, query_state_graph, alpha);
+			solution_weight_H_S_MIRROR_sum = solution_weight_H_S_MIRROR_sum + weight_H_S_MIRROR;
+
+			if (graph_hash_of_mixed_weighted_graph1_is_in_graph2(solu_H_S_MIRROR.first, instance_graph) == false) {
+				cout << "this is an anomly!" << endl;
+				getchar();
+			}
+		}
+
+		if (0) {
+			auto begin2 = std::chrono::high_resolution_clock::now();
+			double SMIRROR_value_for_upper_bound;
+			pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_H_S_MIRROR = accelerated_H_S_MIRROR
+			({ V, V + time_slot_num - 1 }, instance_graph, query_state_graph, alpha, 1, 3);
+			auto end2 = std::chrono::high_resolution_clock::now();
+			double runningtime2 = std::chrono::duration_cast<std::chrono::nanoseconds>(end2 - begin2).count() / 1e9; // s
+			time_accelerated_H_S_MIRROR_avg = time_accelerated_H_S_MIRROR_avg + (double)runningtime2 / iteration_times;
+			double weight_H_S_MIRROR = net_weight_PCSTPTG_single_bump(solu_H_S_MIRROR.first, solu_H_S_MIRROR.second, query_state_graph, alpha);
+			solution_weight_accelerated_H_S_MIRROR_sum = solution_weight_accelerated_H_S_MIRROR_sum + weight_H_S_MIRROR;
+
+			if (graph_hash_of_mixed_weighted_graph1_is_in_graph2(solu_H_S_MIRROR.first, instance_graph) == false) {
+				cout << "this is an anomly!" << endl;
+				getchar();
+			}
+		}
+
+		if (0) {
+			auto begin3 = std::chrono::high_resolution_clock::now();
+			pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_Smart_ST = Smart_ST
+			({ V, V + time_slot_num - 1 }, instance_graph, query_state_graph, alpha);
+			auto end3 = std::chrono::high_resolution_clock::now();
+			double runningtime3 = std::chrono::duration_cast<std::chrono::nanoseconds>(end3 - begin3).count() / 1e9; // s
+			time_Smart_ST_avg = time_Smart_ST_avg + (double)runningtime3 / iteration_times;
+			double weight_Smart_ST = net_weight_PCSTPTG_single_bump(solu_Smart_ST.first, solu_Smart_ST.second, query_state_graph, alpha);
+			solution_weight_Smart_ST_sum = solution_weight_Smart_ST_sum + weight_Smart_ST;
+		}
+
+		if (0) {
+			auto begin4 = std::chrono::high_resolution_clock::now();
+			pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_Random_ST = Random_ST
+			({ V, V + time_slot_num - 1 }, instance_graph, query_state_graph, alpha, 3);
+			auto end4 = std::chrono::high_resolution_clock::now();
+			double runningtime4 = std::chrono::duration_cast<std::chrono::nanoseconds>(end4 - begin4).count() / 1e9; // s
+			time_Random_ST_avg = time_Random_ST_avg + (double)runningtime4 / iteration_times;
+			double weight_Random_ST = net_weight_PCSTPTG_single_bump(solu_Random_ST.first, solu_Random_ST.second, query_state_graph, alpha);
+			solution_weight_Random_ST_sum = solution_weight_Random_ST_sum + weight_Random_ST;
+		}
+
+		if (0) {
+			auto begin5 = std::chrono::high_resolution_clock::now();
+			pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_BF_ST = BF_ST
+			({ V, V + time_slot_num - 1 }, instance_graph, query_state_graph, alpha, 3);
+			auto end5 = std::chrono::high_resolution_clock::now();
+			double runningtime5 = std::chrono::duration_cast<std::chrono::nanoseconds>(end5 - begin5).count() / 1e9; // s
+			time_BF_ST_avg = time_BF_ST_avg + (double)runningtime5 / iteration_times;
+			double weight_BF_ST = net_weight_PCSTPTG_single_bump(solu_BF_ST.first, solu_BF_ST.second, query_state_graph, alpha);
+			solution_weight_BF_ST_sum = solution_weight_BF_ST_sum + weight_BF_ST;
+		}
+
+		if (1) {
+			auto begin5 = std::chrono::high_resolution_clock::now();
+			pair<graph_hash_of_mixed_weighted, pair<int, int>> solu_PCST = PCST
+			({ V, V + time_slot_num - 1 }, instance_graph, query_state_graph, alpha);
+			auto end5 = std::chrono::high_resolution_clock::now();
+			double runningtime5 = std::chrono::duration_cast<std::chrono::nanoseconds>(end5 - begin5).count() / 1e9; // s
+			time_PCST_avg = time_PCST_avg + (double)runningtime5 / iteration_times;
+			double weight_PCST = net_weight_PCSTPTG_single_bump(solu_PCST.first, solu_PCST.second, query_state_graph, alpha);
+			solution_weight_PCST_sum = solution_weight_PCST_sum + weight_PCST;
+		}
+
+	}
+
+
+	cout << "solution_weight_MIRROR_sum = " << solution_weight_MIRROR_sum << endl;
+	cout << "solution_weight_accelerated_MIRROR_sum = " << solution_weight_accelerated_MIRROR_sum << endl;
+	cout << "solution_weight_S_MIRROR_sum = " << solution_weight_S_MIRROR_sum << endl;
+	cout << "solution_weight_accelerated_S_MIRROR_sum = " << solution_weight_accelerated_S_MIRROR_sum << endl;
+	cout << "solution_weight_H_MIRROR_sum = " << solution_weight_H_MIRROR_sum << endl;
+	cout << "solution_weight_accelerated_H_MIRROR_sum = " << solution_weight_accelerated_H_MIRROR_sum << endl;
+	cout << "solution_weight_H_S_MIRROR_sum = " << solution_weight_H_S_MIRROR_sum << endl;
+	cout << "solution_weight_accelerated_H_S_MIRROR_sum = " << solution_weight_accelerated_H_S_MIRROR_sum << endl;
+	cout << "solution_weight_Smart_ST_sum = " << solution_weight_Smart_ST_sum << endl;
+	cout << "solution_weight_Random_ST_sum = " << solution_weight_Random_ST_sum << endl;
+	cout << "solution_weight_BF_ST_sum = " << solution_weight_BF_ST_sum << endl;
+	cout << "solution_weight_PCST_sum = " << solution_weight_PCST_sum << endl;
+
+	cout << "time_MIRROR_avg = " << time_MIRROR_avg << "s" << endl;
+	cout << "time_accelerated_MIRROR_avg = " << time_accelerated_MIRROR_avg << "s" << endl;
+	cout << "time_S_MIRROR_avg = " << time_S_MIRROR_avg << "s" << endl;
+	cout << "time_accelerated_S_MIRROR_avg = " << time_accelerated_S_MIRROR_avg << "s" << endl;
+	cout << "time_H_MIRROR_avg = " << time_H_MIRROR_avg << "s" << endl;
+	cout << "time_accelerated_H_MIRROR_avg = " << time_accelerated_H_MIRROR_avg << "s" << endl;
+	cout << "time_H_S_MIRROR_avg = " << time_H_S_MIRROR_avg << "s" << endl;
+	cout << "time_accelerated_H_S_MIRROR_avg = " << time_accelerated_H_S_MIRROR_avg << "s" << endl;
+	cout << "time_Smart_ST_avg = " << time_Smart_ST_avg << "s" << endl;
+	cout << "time_Random_ST_avg = " << time_Random_ST_avg << "s" << endl;
+	cout << "time_BF_ST_avg = " << time_BF_ST_avg << "s" << endl;
+	cout << "time_PCST_avg = " << time_PCST_avg << "s" << endl;
+}
+#pragma endregion simple_iterative_tests
+
+#pragma region
+void combine_data_files() {
+
+	ofstream outputFile;
+	outputFile.precision(6);
+	outputFile.setf(ios::fixed);
+	outputFile.setf(ios::showpoint);
+
+	if (1) {
+		outputFile.open("experiment_Reddit_vary_m_3.csv");
+		for (int i = 1; i <= 10; i++) {
+			string file_name = "experiment_Reddit_vary_m_3_" + to_string(i) + ".csv";
+			string line_content;
+			ifstream myfile(file_name); // open the file
+			if (myfile.is_open()) // if the file is opened successfully
+			{
+				int xx = 0;
+				while (getline(myfile, line_content)) // read file line by line
+				{
+					xx++;
+					if (i == 1 || xx > 1) {
+						outputFile << line_content << endl;
+					}
+				}
+				myfile.close(); //close the file
+			}
+			else
+			{
+				std::cout << "Unable to open file " << file_name << endl << "Please check the file location or file name." << endl; // throw an error message
+				getchar(); // keep the console window
+				exit(1); // end the program
+			}
+		}
+		outputFile.close();
+	}
+
+
+}
+#pragma endregion combine_data_files
+
+#pragma region
+void combine_data_files_multiple() {
+
+	ofstream outputFile;
+	outputFile.precision(6);
+	outputFile.setf(ios::fixed);
+	outputFile.setf(ios::showpoint);
+
+	/*Wiki*/
+	if (0) {
+
+		if (1) {
+			string xxx = "experiment_Wiki_base";
+			outputFile.open(xxx + ".csv");
+			for (int i = 1; i <= 2; i++) {
+				string file_name = xxx + "_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			string xxx = "experiment_Wiki_compare_basic";
+			outputFile.open(xxx + ".csv");
+			for (int i = 1; i <= 2; i++) {
+				string file_name = xxx + "_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			string xxx = "experiment_Wiki_vary_alpha_1";
+			outputFile.open(xxx + ".csv");
+			for (int i = 1; i <= 2; i++) {
+				string file_name = xxx + "_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+		if (1) {
+			string xxx = "experiment_Wiki_vary_alpha_2";
+			outputFile.open(xxx + ".csv");
+			for (int i = 1; i <= 2; i++) {
+				string file_name = xxx + "_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+		if (1) {
+			string xxx = "experiment_Wiki_vary_alpha_3";
+			outputFile.open(xxx + ".csv");
+			for (int i = 1; i <= 2; i++) {
+				string file_name = xxx + "_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+
+		if (1) {
+			string xxx = "experiment_Wiki_vary_b_2";
+			outputFile.open(xxx + ".csv");
+			for (int i = 1; i <= 2; i++) {
+				string file_name = xxx + "_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			string xxx = "experiment_Wiki_vary_b_3";
+			outputFile.open(xxx + ".csv");
+			for (int i = 1; i <= 2; i++) {
+				string file_name = xxx + "_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			string xxx = "experiment_Wiki_vary_h_1";
+			outputFile.open(xxx + ".csv");
+			for (int i = 1; i <= 2; i++) {
+				string file_name = xxx + "_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			string xxx = "experiment_Wiki_vary_h_2";
+			outputFile.open(xxx + ".csv");
+			for (int i = 1; i <= 2; i++) {
+				string file_name = xxx + "_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			string xxx = "experiment_Wiki_vary_h_3";
+			outputFile.open(xxx + ".csv");
+			for (int i = 1; i <= 2; i++) {
+				string file_name = xxx + "_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			string xxx = "experiment_Wiki_vary_m_3";
+			outputFile.open(xxx + ".csv");
+			for (int i = 1; i <= 5; i++) {
+				string file_name = xxx + "_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			string xxx = "experiment_Wiki_vary_p_1";
+			outputFile.open(xxx + ".csv");
+			for (int i = 1; i <= 2; i++) {
+				string file_name = xxx + "_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			string xxx = "experiment_Wiki_vary_p_2";
+			outputFile.open(xxx + ".csv");
+			for (int i = 1; i <= 2; i++) {
+				string file_name = xxx + "_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			string xxx = "experiment_Wiki_vary_p_3";
+			outputFile.open(xxx + ".csv");
+			for (int i = 1; i <= 2; i++) {
+				string file_name = xxx + "_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			string xxx = "experiment_Wiki_vary_V_1";
+			outputFile.open(xxx + ".csv");
+			for (int i = 1; i <= 2; i++) {
+				string file_name = xxx + "_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			string xxx = "experiment_Wiki_vary_V_2";
+			outputFile.open(xxx + ".csv");
+			for (int i = 1; i <= 2; i++) {
+				string file_name = xxx + "_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			string xxx = "experiment_Wiki_vary_V_3";
+			outputFile.open(xxx + ".csv");
+			for (int i = 1; i <= 2; i++) {
+				string file_name = xxx + "_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+	}
+
+	/*reddit*/
+	if (1) {
+
+		if (1) {
+			outputFile.open("experiment_Reddit_base.csv");
+			for (int i = 1; i <= 5; i++) {
+				string file_name = "experiment_Reddit_base_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			outputFile.open("experiment_Reddit_vary_alpha_1.csv");
+			for (int i = 1; i <= 5; i++) {
+				string file_name = "experiment_Reddit_vary_alpha_1_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			outputFile.open("experiment_Reddit_vary_alpha_2.csv");
+			for (int i = 1; i <= 5; i++) {
+				string file_name = "experiment_Reddit_vary_alpha_2_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			outputFile.open("experiment_Reddit_vary_alpha_3.csv");
+			for (int i = 1; i <= 5; i++) {
+				string file_name = "experiment_Reddit_vary_alpha_3_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			outputFile.open("experiment_Reddit_vary_m_2.csv");
+			for (int i = 1; i <= 5; i++) {
+				string file_name = "experiment_Reddit_vary_m_2_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			outputFile.open("experiment_Reddit_vary_m_3.csv");
+			for (int i = 1; i <= 5; i++) {
+				string file_name = "experiment_Reddit_vary_m_3_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			outputFile.open("experiment_Reddit_vary_p_1.csv");
+			for (int i = 1; i <= 5; i++) {
+				string file_name = "experiment_Reddit_vary_p_1_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			outputFile.open("experiment_Reddit_vary_p_2.csv");
+			for (int i = 1; i <= 5; i++) {
+				string file_name = "experiment_Reddit_vary_p_2_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			outputFile.open("experiment_Reddit_vary_p_3.csv");
+			for (int i = 1; i <= 5; i++) {
+				string file_name = "experiment_Reddit_vary_p_3_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			outputFile.open("experiment_Reddit_vary_s_2.csv");
+			for (int i = 1; i <= 5; i++) {
+				string file_name = "experiment_Reddit_vary_s_2_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			outputFile.open("experiment_Reddit_vary_s_3.csv");
+			for (int i = 1; i <= 5; i++) {
+				string file_name = "experiment_Reddit_vary_s_3_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			outputFile.open("experiment_Reddit_vary_V_2.csv");
+			for (int i = 1; i <= 5; i++) {
+				string file_name = "experiment_Reddit_vary_V_2_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+
+		if (1) {
+			outputFile.open("experiment_Reddit_vary_V_3.csv");
+			for (int i = 1; i <= 5; i++) {
+				string file_name = "experiment_Reddit_vary_V_3_" + to_string(i) + ".csv";
+				string line_content;
+				ifstream myfile(file_name); // open the file
+				if (myfile.is_open()) // if the file is opened successfully
+				{
+					int xx = 0;
+					while (getline(myfile, line_content)) // read file line by line
+					{
+						xx++;
+						if (i == 1 || xx > 1) {
+							outputFile << line_content << endl;
+						}
+					}
+					myfile.close(); //close the file
+				}
+			}
+			outputFile.close();
+		}
+	}
+
+}
+#pragma endregion combine_data_files_multiple
+
+#pragma region
+void check_Gamma2_ratio() {
+
+
+	/*output*/
+	ofstream outputFile;
+	outputFile.precision(6);
+	outputFile.setf(ios::fixed);
+	outputFile.setf(ios::showpoint);
+	outputFile.open("check_Gamma2_ratio.csv");
+	outputFile << "m,Gamma2,Gamma2/Phi,max_T_i/m" << endl;
+
+	for (int m = 1; m <= 150; m++) {
+
+		std::unordered_set<string> Omega3;
+		vector<pair<pair<int, int>, int>> Phi = sorted_selected_time_subintervals({ 1, m }, 0, Omega3);
+
+		outputFile << m << "," << Phi.size() << "," << (double)Phi.size() / (m * (m + 1) / 2) << "," << (double)(Phi[0].first.second - Phi[0].first.first + 1) / m << endl;
+	}
+	outputFile.close();
+}
+#pragma endregion check_Gamma2_ratio
+
+#pragma region
+void print_num_time_subintervals() {
+
+	/*output*/
+	ofstream outputFile;
+	outputFile.precision(6);
+	outputFile.setf(ios::fixed);
+	outputFile.setf(ios::showpoint);
+	outputFile.open("print_num_time_subintervals.csv");
+	outputFile << "m,Phi_num,omega_h0_num,omega_h1_num,omega_h2_num,omega_h3_num" << endl;
+
+	for (int m = 1; m <= 120; m++) {
+
+		vector<pair<pair<int, int>, int>> Phi = sorted_all_time_subintervals({ 1, m });
+		std::unordered_set<string> Omega3;
+		vector<pair<pair<int, int>, int>> omega_h0 = sorted_selected_time_subintervals({ 1, m }, 0, Omega3);
+		vector<pair<pair<int, int>, int>> omega_h1 = sorted_selected_time_subintervals({ 1, m }, 1, Omega3);
+		vector<pair<pair<int, int>, int>> omega_h2 = sorted_selected_time_subintervals({ 1, m }, 2, Omega3);
+		vector<pair<pair<int, int>, int>> omega_h3 = sorted_selected_time_subintervals({ 1, m }, 3, Omega3);
+
+
+		outputFile << m << "," << Phi.size() << "," << omega_h0.size() << "," << omega_h1.size() << "," << omega_h2.size() << "," << omega_h3.size() << endl;
+	}
+	outputFile.close();
+
+
+
+
+}
+#pragma endregion print_num_time_subintervals
+
+#pragma region
+void draw_random_graph() {
+
+	int V = 20, E = 19, precision = 1;
+	double ec_min = 1, ec_max = 10, nw_min = 1, nw_max = 10;
+
+	graph_hash_of_mixed_weighted instance_graph = graph_hash_of_mixed_weighted_generate_random_graph(V, E, nw_min, nw_max, ec_min, ec_max, precision);
+
+	/*output*/
+	ofstream outputFile;
+	outputFile.precision(6);
+	outputFile.setf(ios::fixed);
+	outputFile.setf(ios::showpoint);
+	outputFile.open("draw_random_graph.csv");
+	outputFile << "e1,e2" << endl;
+
+	for (auto it1 = instance_graph.hash_of_vectors.begin(); it1 != instance_graph.hash_of_vectors.end(); it1++) {
+		int i = it1->first;
+
+		auto search = instance_graph.hash_of_hashs.find(i);
+		if (search != instance_graph.hash_of_hashs.end()) {
+			for (auto it2 = search->second.begin(); it2 != search->second.end(); it2++) {
+				int j = it2->first;
+				if (i < j) {
+					outputFile << i << "," << j << endl;
+				}
+			}
+		}
+		else {
+			auto search2 = instance_graph.hash_of_vectors.find(i);
+			for (auto it2 = search2->second.adj_vertices.begin(); it2 != search2->second.adj_vertices.end(); it2++) {
+				int j = it2->first;
+				if (i < j) {
+					outputFile << i << "," << j << endl;
+				}
+			}
+		}
+	}
+
+
+}
+#pragma endregion draw_random_graph
+
+#pragma region
+#include <graph_hash_of_mixed_weighted/graph_hash_of_mixed_weighted_graph1_is_graph2.h>
+void test_bfs() {
+
+	/*parameters*/
+	int iteration_times = 1000;
+	int V = 100, E = 500, precision = 1, time_slot_num = 48, query_state_graph_E = 10;
+	double alpha, ec_min = 1, ec_max = 10, nw_min = 1, nw_max = 10;
+
+	/*iteration*/
+	for (int i = 0; i < iteration_times; i++) {
+
+		alpha = (double)(rand() % 11) / 10;
+
+		/*input and output*/
+		int generate_new_graph = 1;
+		graph_hash_of_mixed_weighted instance_graph, query_state_graph;
+		if (generate_new_graph == 1) {
+			instance_graph = graph_hash_of_mixed_weighted_generate_random_graph(V, E, nw_min, nw_max, ec_min, ec_max, precision);
+			query_state_graph = graph_hash_of_mixed_weighted_generate_random_query_state_graph(V, time_slot_num, query_state_graph_E);
+			//graph_hash_of_mixed_weighted_print(instance_graph);
+			graph_hash_of_mixed_weighted_save_graph_with_weight("instance_graph.txt", instance_graph, alpha);
+			graph_hash_of_mixed_weighted_save_graph_with_weight("query_state_graph.txt", query_state_graph, alpha);
+		}
+		else {
+			graph_hash_of_mixed_weighted_read_graph_with_weight("instance_graph.txt", instance_graph,
+				alpha);
+			graph_hash_of_mixed_weighted_read_graph_with_weight("query_state_graph.txt", query_state_graph,
+				alpha);
+			//graph_hash_of_mixed_weighted_print(instance_graph);
+		}
+
+		pair<int, int> aa = { V + 1, V + 5 };
+		graph_hash_of_mixed_weighted g1 = instance_graph, g2 = instance_graph;
+		bfs_reduce_graph(aa, query_state_graph, g1, 1, 1);
+		accelerated_bfs_reduce_graph(aa, query_state_graph, g2, 1, 1);
+
+		if (graph_hash_of_mixed_weighted_graph1_is_graph2(g1, g2) == false) {
+			cout << "graph_hash_of_mixed_weighted_graph1_is_graph2(g1, g2) == false!" << endl;
+			graph_hash_of_mixed_weighted_print(g1);
+			graph_hash_of_mixed_weighted_print(g2);
+			getchar();
+		}
+	}
+
+}
+#pragma endregion test_bfs
+
+
+
+
+
+
+
+
+
 int main()
 {
 	/*the two values below are for #include <graph_hash_of_mixed_weighted.h>*/
@@ -2824,7 +5021,7 @@ int main()
 
 	auto begin = std::chrono::high_resolution_clock::now();
 
-	parallel_experiments();
+	compare_General_Pruning_tree_old_new();
 
 	auto end = std::chrono::high_resolution_clock::now();
 	double runningtime = std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count() / 1e9; // s
